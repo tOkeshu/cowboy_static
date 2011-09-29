@@ -233,7 +233,7 @@ range_header_exists(Req0, Conf, #state{finfo=FInfo}=State) when Conf#conf.ranges
         {undefined, Req1} ->
             open_file_handle(Req1, Conf, State#state{ranges=none});
         {RangesBin, Req1} ->
-            Ranges = cowboy_sendfile_range:parse_range(RangesBin, ContentLength),
+            Ranges = cowboy_sendfile_hdrs:parse_range(RangesBin, ContentLength),
             open_file_handle(Req1, Conf, State#state{ranges=Ranges})
     end;
 range_header_exists(Req, Conf, State) ->
@@ -322,7 +322,7 @@ init_send_partial_response(Req0, Conf, State) ->
     ContLenStr = integer_to_list(ContentLength),
     Headers = [
         {<<"Content-Length">>, list_to_binary(integer_to_list(Length))},
-        cowboy_sendfile_range:make_range(Start, End, ContentLength)],
+        cowboy_sendfile_hdrs:make_range(Start, End, ContentLength)],
     {ok, Req1} = cowboy_http_req:reply(206, Headers, <<>>, Req0),
     init_send_file_contents(Req1, Conf, State, Start, Length).
 
