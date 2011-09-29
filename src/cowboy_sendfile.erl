@@ -115,9 +115,10 @@ method_allowed(Req0, Conf, State) ->
             {ok, Req2, Conf}
     end.
 
+
 validate_path(Req0, #conf{dir=Dir}=Conf, State) ->
     {Path0, Req1} = cowboy_http_req:path_info(Req0),
-    case abs_path(Dir, Path0) of
+    case abs_path(Dir, esc_path(Path0)) of
         invalid ->
             %% @todo Better response code?
             {ok, Req2} = cowboy_http_reply:reply(404, [], <<>>, Req1),
@@ -125,6 +126,7 @@ validate_path(Req0, #conf{dir=Dir}=Conf, State) ->
         Path1 ->
             validate_path_allowed(Req1, Conf, State#state{path=Path1})
     end.
+
 
 validate_path_allowed(Req0, #conf{dir=Dir}=Conf, #state{path=Path}=State0) ->
     case lists:prefix(Dir, Path) of
@@ -399,6 +401,27 @@ abs_path_([H|T], Stack) ->
     abs_path_(T, [H|Stack]);
 abs_path_([], Stack) ->
     lists:reverse(Stack).
+
+
+%% @private Escape all path segments of a file system path.
+-spec esc_path(Path::[binary()]) -> [binary()].
+esc_path(Path) ->
+    [esc_segment(E, <<>>) || E <- Path].
+
+
+%% @private Escape a segment of a file system path.
+%% - Replaces occurrances of / not prefixed by an odd number of \ with \/.
+-spec esc_segment(Segment::binary(), Acc::binary()) -> binary().
+esc_segment(<<$\\,$\\, Rest/binary>>, Acc) ->
+    esc_segment(Rest, <<Acc/binary, $\\,$\\>>);
+esc_segment(<<$\\,$/, Rest/binary>>, Acc) ->
+    esc_segment(Rest, <<Acc/binary, $\\,$/>>);
+esc_segment(<<$/, Rest/binary>>, Acc) ->
+    esc_segment(Rest, <<Acc/binary, $\\,$/>>);
+esc_segment(<<C, Rest/binary>>, Acc) ->
+    esc_segment(Rest, <<Acc/binary, C>>);
+esc_segment(<<>>, Acc) ->
+    Acc.
 
 
 -ifdef(TEST).
