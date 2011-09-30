@@ -12,11 +12,19 @@
 %% ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 %% OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
--module(cowboy_sendfile_range).
+-module(cowboy_sendfile_hdrs).
+
+%% include files
+-include_lib("cowboy/include/http.hrl").
+
+%% range header functions
 -export([get_range/1,
          parse_range/2,
          make_range/3,
          make_range/2]).
+
+%% location header functions
+-export([make_location/1]).
 
 -type uint() :: non_neg_integer().
 
@@ -117,6 +125,37 @@ binary_to_integer(Bin) ->
         {Integer, ""} -> Integer;
         {_Integer, _} -> error
     end.
+
+%% @doc Return the value of the Location header in a 301 response.
+%% @end
+-spec make_location(#http_req{}) -> {binary(), #http_req{}}.
+make_location(Req0) ->
+    #http_req{transport=Transport} = Req0,
+    Protocol = Transport:name(),
+    %% @todo If we are running behind a proxy this is not a
+    %% reliable mechanism to determine if the client connects
+    %% using an http or https connection. likely downgrade.
+    Scheme = case Protocol of
+        tcp -> <<"http://">>;
+        ssl -> <<"https://">>
+    end,
+    {Port, Req1} = cowboy_http_req:port(Req0),
+    PortStr = case Scheme of
+        <<"http://">> when Port =:= 80 -> <<>>;
+        <<"https://">> when Port =:= 443 -> <<>>;
+        <<"http://">> -> [$:|integer_to_list(Port)];
+        <<"https://">> -> [$:|integer_to_list(Port)]
+    end,
+    {RawHost, Req2} = cowboy_http_req:raw_host(Req1),
+    {RawPath, Req3} = cowboy_http_req:raw_path(Req2),
+    {RawQS, Req4} = cowboy_http_req:raw_qs(Req3),
+    QueryStr = case RawQS of
+        <<>> -> <<>>;
+        _ -> [$?|RawQS]
+    end,
+    RedirectURL = iolist_to_binary([
+        Scheme, RawHost, PortStr, RawPath, $/, QueryStr]),
+    {RedirectURL, Req4}.
 
 
 -ifdef(TEST).

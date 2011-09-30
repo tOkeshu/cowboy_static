@@ -157,41 +157,10 @@ validate_resource_type(Req0, Conf, #state{finfo=FInfo}=State) ->
             {ok, Req2} = cowboy_http_req:reply(404, [], <<>>, Req1),
             {ok, Req2, Conf};
         #file_info{type=directory} when LastChar =/= $/ ->
-            #http_req{transport=Transport} = Req1,
-            Protocol = Transport:name(),
-            %% @todo If we are running behind a proxy this is not a
-            %% reliable mechanism to determine if the client connects
-            %% using an http or https connection. likely downgrade.
-            Scheme = case Protocol of
-                tcp -> <<"http://">>;
-                ssl -> <<"https://">>
-            end,
-            {Port, Req2} = cowboy_http_req:port(Req1),
-            PortStr = case Scheme of
-                <<"http://">> when Port =:= 80 ->
-                    <<>>;
-                <<"http://">> ->
-                    [$:|integer_to_list(Port)];
-                <<"https://">> when Port =:= 443 ->
-                    <<>>;
-                <<"https://">> ->
-                    [$:|integer_to_list(Port)]
-            end,
-            {RawHost, Req3} = cowboy_http_req:raw_host(Req2),
-            {RawQS, Req4} = cowboy_http_req:raw_qs(Req3),
-            QueryString = case RawQS of
-                <<>> -> <<>>;
-                _ -> [$?|RawQS]
-            end,
-            RedirectURL = iolist_to_binary([
-                Scheme,
-                RawHost,
-                PortStr,
-                RawPath, $/,
-                QueryString]),
+            {RedirectURL, Req2} = cowboy_sendfile_hdrs:make_location(Req1),
             Headers = [{<<"Location">>, RedirectURL}],
-            {ok, Req5} = cowboy_http_req:reply(301, Headers, <<>>, Req1),
-            {ok, Req5, Conf};
+            {ok, Req3} = cowboy_http_req:reply(301, Headers, <<>>, Req2),
+            {ok, Req3, Conf};
         _Other ->
             {ok, Req2} = cowboy_http_req:reply(404, [], <<>>, Req1),
             {ok, Req2, Conf}
@@ -382,6 +351,7 @@ send_file_contents(Req1, Conf, State, Transport, Socket, FD, ChunkSize, N) ->
             ok = Transport:send(Socket, Data),
             send_file_contents(Req1, Conf, State, Transport, Socket, FD, ChunkSize, N-NBytes)
     end.
+
 
 %% @private Return an absolute file path based on the static file root.
 -spec abs_path(Dir::[binary()], Path::[binary()]) -> [binary()].
