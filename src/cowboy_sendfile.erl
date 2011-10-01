@@ -251,7 +251,7 @@ init_send_reply(Req, Conf, State) ->
 
 
 init_send_complete_response(Req0, Conf, State) ->
-    #state{finfo=FInfo, path=Path, ctype=CType} = State,
+    #state{finfo=FInfo, ctype=CType} = State,
     CacheEntry = cowboy_sendfile_cache:read_entry(FInfo, Conf#conf.chandle),
     LastModified = cowboy_sendfile_cache:last_modified(CacheEntry),
     ContentLength = cowboy_sendfile_cache:content_length(CacheEntry),
@@ -267,7 +267,6 @@ init_send_complete_response(Req0, Conf, State) ->
         'HEAD' ->
             {ok, Req1, Conf};
         'GET' ->
-            #http_req{socket=Socket} = Req1,
             Filesize = FInfo#file_info.size,
             init_send_file_contents(Req1, Conf, State, 0, Filesize)
     end.
@@ -347,7 +346,7 @@ init_send_file_contents(Req, Conf, State, Start, Length) ->
     send_file_contents(Req, Conf, State, Transport, Socket, FD, ChunkSize, Length).
 
 
-send_file_contents(Req, Conf, State, Transport, Socket, FD, ChunkSize, 0) ->
+send_file_contents(Req, Conf, _State, _Transport, _Socket, _FD, _ChunkSize, 0) ->
     %% file:close(FD),
     {ok, Req, Conf};
 send_file_contents(Req1, Conf, State, Transport, Socket, FD, ChunkSize, N) ->
