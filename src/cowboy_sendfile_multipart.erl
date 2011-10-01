@@ -40,7 +40,7 @@ partial_([{Start, End, _}=H|T], Boundary, FileSize) ->
     %% A boundary string starting with -- is written before each section.
     PreBoundary = [<<"--">>, Boundary, <<"\r\n">>],
     %% A Content-Range header defines the byte-range of this section.
-    {_, RangeSpec} = cowboy_sendfile_range:make_range(Start, End, FileSize),
+    {_, RangeSpec} = cowboy_sendfile_hdrs:make_range(Start, End, FileSize),
     ContentRangeHdr = [<<"Content-Range: ">>, RangeSpec, <<"\r\n">>],
     %% Use a default type header before MIME type support is implemented.
     ContentTypeHdr = <<"Content-Type: application/octet-stream\r\n">>,

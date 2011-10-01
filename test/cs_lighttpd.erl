@@ -12,22 +12,22 @@ init_server(Config) ->
     Dir = ?config(priv_dir, Config),
     ConfigFile = filename:join(Dir, "lighttpd.conf"),
     ?line(ok = file:write_file(ConfigFile, make_config(Port, Dir))),
-    CmdLine = "cat | /usr/sbin/lighttpd -D -f " ++ ConfigFile ++ " ; kill 0",
+    CmdLine = "/usr/sbin/lighttpd -D -f " ++ ConfigFile,
     Runner = self(),
     Pid = spawn(fun() ->
         CmdPort = open_port({spawn, CmdLine}, [binary, stream, eof]),
-        receive
-            close ->
-                port_close(CmdPort)
-        end
+        receive close -> port_close(CmdPort) end
     end),
     [{lighttpd_pid,Pid}|Config].
 
 end_server(Config) ->
     Pid = ?config(lighttpd_pid, Config),
+    Pid ! close,
     PidFile = filename:join([?config(priv_dir, Config), "lighttpd.pid"]),
     {ok, BinOSPid} = file:read_file(PidFile),
-    os:cmd("kill " ++ binary_to_list(BinOSPid)).
+    os:cmd("kill " ++ binary_to_list(BinOSPid)),
+    receive after 5000 -> ok end.
+
 
 -define(fmt(Fmt, Args), io_lib:format(Fmt, Args)).
 make_config(Port, Dir) ->
@@ -42,4 +42,4 @@ make_config(Port, Dir) ->
     ],
     BinConfigLines = [iolist_to_binary(Line) || Line <- IOConfigLines],
     StrConfigLines = [binary_to_list(Line) || Line <- BinConfigLines],
-    string:join(StrConfigLines, "\n").
+    string:join(StrConfigLines, "\n") ++ "\n".

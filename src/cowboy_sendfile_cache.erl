@@ -29,7 +29,11 @@
 %% exported functions
 -export([make/0,
          read_info/2,
-         read_entry/2]).
+         read_entry/2,
+         content_length/1,
+         last_modified/1]).
+
+%% entry access functions
 
 -record(cache_handle, {
     table  :: ets:tid(),
@@ -51,13 +55,13 @@
 %% @doc Make a new cache instance.
 -spec make() -> {ok, handle()}.
 make() ->
-    #cache_handle{}.
+    {ok, #cache_handle{}}.
 
 
 %% @doc Read file info from disk.
 -spec read_info([binary()], handle()) -> {ok, #file_info{}} | {error, _}.
 read_info(Path, _Handle) ->
-    file:read_file_info(filename:join(Path)).
+    file:read_file_info(Path).
 
 
 %% @doc Read a cache entry for a file.
@@ -67,7 +71,7 @@ read_entry(Fileinfo, _Handle) ->
 
 
 %% @private Make a new cache entry.
--spec make_entry(#file_info{}) -> #cache_entry{}.
+-spec make_entry(#file_info{}) -> {ok, entry()}.
 make_entry(Fileinfo) ->
     Inode = Fileinfo#file_info.inode,
     Size = Fileinfo#file_info.size,
@@ -78,3 +82,13 @@ make_entry(Fileinfo) ->
         inode=Inode, mtime=MTime,
         content_length=ContentLength,
         last_modified=LastModified}.
+
+%% @doc Return the Content-Length value of a cache entry.
+-spec content_length(entry()) -> binary().
+content_length(CacheEntry) ->
+    CacheEntry#cache_entry.content_length.
+
+%% @doc Return the Last-Modified value of a cache entry.
+-spec last_modified(entry()) -> binary().
+last_modified(CacheEntry) ->
+    CacheEntry#cache_entry.last_modified.

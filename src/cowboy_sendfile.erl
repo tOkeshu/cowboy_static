@@ -27,6 +27,7 @@
 
 %% type aliases
 -type uint() :: non_neg_integer().
+-type cache_handle() :: cowboy_sendfile_cache:handle().
 
 %% handler config
 -record(conf, {
@@ -36,7 +37,8 @@
     ranges   :: boolean(),
     usesfile :: boolean(),
     mimemod  :: atom(),
-    mimearg  :: term()}).
+    mimearg  :: term(),
+    chandle  :: cache_handle()}).
 
 %% handler state
 -record(state, {
@@ -80,6 +82,8 @@ rule(Opts) ->
         {_, IMimeMod, IMimeArg} -> {IMimeMod, IMimeArg};
         false -> {mimetypes, default}
     end,
+    %% @todo Create this elsewhere.
+    {ok, CacheHandle} = cowboy_sendfile_cache:make(),
     Conf = #conf{
         dir=Dir,
         csize=Size,
@@ -87,7 +91,8 @@ rule(Opts) ->
         ranges=Ranges,
         usesfile=Sendfile,
         mimemod=MimeMod,
-        mimearg=MimeArg},
+        mimearg=MimeArg,
+        chandle=CacheHandle},
     Pattern = Prefix ++ ['...'],
     {Pattern, ?MODULE, Conf}.
 
@@ -138,8 +143,8 @@ validate_path_allowed(Req0, #conf{dir=Dir}=Conf, #state{path=Path}=State0) ->
             resource_exists(Req0, Conf, State1)
     end.
 
-resource_exists(Req0, Conf, #state{path=Path}=State) ->
-    case file:read_file_info(Path) of
+resource_exists(Req0, #conf{chandle=Cache}=Conf, #state{path=Path}=State) ->
+    case cowboy_sendfile_cache:read_info(Path, Cache) of
         {ok, #file_info{}=FInfo} ->
             validate_resource_type(Req0, Conf, State#state{finfo=FInfo});
         {error, enoent} ->
