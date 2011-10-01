@@ -252,11 +252,13 @@ init_send_reply(Req, Conf, State) ->
 
 init_send_complete_response(Req0, Conf, State) ->
     #state{finfo=FInfo, path=Path, ctype=CType} = State,
-    #file_info{size=ContentLength} = FInfo,
-    BinContentLength = list_to_binary(integer_to_list(ContentLength)),
+    CacheEntry = cowboy_sendfile_cache:read_entry(FInfo, Conf#conf.chandle),
+    LastModified = cowboy_sendfile_cache:last_modified(CacheEntry),
+    ContentLength = cowboy_sendfile_cache:content_length(CacheEntry),
     Headers = [
-        {<<"Content-Length">>, BinContentLength},
-        {<<"Content-Type">>, CType}],
+        {<<"Content-Length">>, ContentLength},
+        {<<"Content-Type">>, CType},
+        {<<"Last-Modified">>, LastModified}],
     {ok, Req1} = cowboy_http_req:reply(200, Headers, <<>>, Req0),
     %% The response to a HEAD Request is expected to be the same as a GET
     %% except for the lack of a Response body. Stop right before sending
@@ -266,7 +268,8 @@ init_send_complete_response(Req0, Conf, State) ->
             {ok, Req1, Conf};
         'GET' ->
             #http_req{socket=Socket} = Req1,
-            init_send_file_contents(Req1, Conf, State, 0, ContentLength)
+            Filesize = FInfo#file_info.size,
+            init_send_file_contents(Req1, Conf, State, 0, Filesize)
     end.
 
 
