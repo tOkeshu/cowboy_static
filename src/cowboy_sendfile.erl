@@ -295,8 +295,6 @@ send_chunked_response_body(Req, Conf, State, FD, ChSize, N) ->
 init_send_partial_response(Req0, Conf, State) ->
     #state{ranges=[{Start, End, Length}], finfo=FInfo} = State,
     #file_info{size=ContentLength} = FInfo,
-    LengthStr  = integer_to_list(Length),
-    ContLenStr = integer_to_list(ContentLength),
     Headers = [
         {<<"Content-Length">>, list_to_binary(integer_to_list(Length))},
         cowboy_sendfile_hdrs:make_range(Start, End, ContentLength)],
