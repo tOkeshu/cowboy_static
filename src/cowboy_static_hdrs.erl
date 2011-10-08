@@ -12,7 +12,7 @@
 %% ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 %% OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
--module(cowboy_sendfile_hdrs).
+-module(cowboy_static_hdrs).
 
 %% include files
 -include_lib("cowboy/include/http.hrl").

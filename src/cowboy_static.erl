@@ -12,7 +12,7 @@
 %% ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 %% OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
--module(cowboy_sendfile).
+-module(cowboy_static).
 -behaviour(cowboy_http_handler).
 
 %% include files
@@ -27,7 +27,7 @@
 
 %% type aliases
 -type uint() :: non_neg_integer().
--type cache_handle() :: cowboy_sendfile_cache:handle().
+-type cache_handle() :: cowboy_static_cache:handle().
 
 %% handler config
 -record(conf, {
@@ -83,7 +83,7 @@ rule(Opts) ->
         false -> {mimetypes, default}
     end,
     %% @todo Create this elsewhere.
-    {ok, CacheHandle} = cowboy_sendfile_cache:make(),
+    {ok, CacheHandle} = cowboy_static_cache:make(),
     Conf = #conf{
         dir=Dir,
         csize=Size,
@@ -144,7 +144,7 @@ validate_path_allowed(Req0, #conf{dir=Dir}=Conf, #state{path=Path}=State0) ->
     end.
 
 resource_exists(Req0, #conf{chandle=Cache}=Conf, #state{path=Path}=State) ->
-    case cowboy_sendfile_cache:read_info(Path, Cache) of
+    case cowboy_static_cache:read_info(Path, Cache) of
         {ok, #file_info{}=FInfo} ->
             validate_resource_type(Req0, Conf, State#state{finfo=FInfo});
         {error, enoent} ->
@@ -162,7 +162,7 @@ validate_resource_type(Req0, Conf, #state{finfo=FInfo}=State) ->
             {ok, Req2} = cowboy_http_req:reply(404, [], <<>>, Req1),
             {ok, Req2, Conf};
         #file_info{type=directory} when LastChar =/= $/ ->
-            {RedirectURL, Req2} = cowboy_sendfile_hdrs:make_location(Req1),
+            {RedirectURL, Req2} = cowboy_static_hdrs:make_location(Req1),
             Headers = [{<<"Location">>, RedirectURL}],
             {ok, Req3} = cowboy_http_req:reply(301, Headers, <<>>, Req2),
             {ok, Req3, Conf};
@@ -207,7 +207,7 @@ range_header_exists(Req0, Conf, #state{finfo=FInfo}=State) when Conf#conf.ranges
         {undefined, Req1} ->
             open_file_handle(Req1, Conf, State#state{ranges=none});
         {RangesBin, Req1} ->
-            Ranges = cowboy_sendfile_hdrs:parse_range(RangesBin, ContentLength),
+            Ranges = cowboy_static_hdrs:parse_range(RangesBin, ContentLength),
             open_file_handle(Req1, Conf, State#state{ranges=Ranges})
     end;
 range_header_exists(Req, Conf, State) ->
@@ -252,9 +252,9 @@ init_send_reply(Req, Conf, State) ->
 
 init_send_complete_response(Req0, Conf, State) ->
     #state{finfo=FInfo, ctype=CType} = State,
-    CacheEntry = cowboy_sendfile_cache:read_entry(FInfo, Conf#conf.chandle),
-    LastModified = cowboy_sendfile_cache:last_modified(CacheEntry),
-    ContentLength = cowboy_sendfile_cache:content_length(CacheEntry),
+    CacheEntry = cowboy_static_cache:read_entry(FInfo, Conf#conf.chandle),
+    LastModified = cowboy_static_cache:last_modified(CacheEntry),
+    ContentLength = cowboy_static_cache:content_length(CacheEntry),
     Headers = [
         {<<"Content-Length">>, ContentLength},
         {<<"Content-Type">>, CType},
@@ -296,7 +296,7 @@ init_send_partial_response(Req0, Conf, State) ->
     #file_info{size=ContentLength} = FInfo,
     Headers = [
         {<<"Content-Length">>, list_to_binary(integer_to_list(Length))},
-        cowboy_sendfile_hdrs:make_range(Start, End, ContentLength)],
+        cowboy_static_hdrs:make_range(Start, End, ContentLength)],
     {ok, Req1} = cowboy_http_req:reply(206, Headers, <<>>, Req0),
     init_send_file_contents(Req1, Conf, State, Start, Length).
 
@@ -305,11 +305,11 @@ init_send_partial_response(Req0, Conf, State) ->
 init_send_multipart_response(Req0, Conf, State) ->
     #state{ranges=Ranges, finfo=FInfo} = State,
     #file_info{size=FileSize} = FInfo,
-    Boundary = cowboy_sendfile_multipart:make_boundary(),
-    Partial = cowboy_sendfile_multipart:partial(Ranges, Boundary, FileSize),
-    ContentLength = cowboy_sendfile_multipart:content_length(Partial),
+    Boundary = cowboy_static_multipart:make_boundary(),
+    Partial = cowboy_static_multipart:partial(Ranges, Boundary, FileSize),
+    ContentLength = cowboy_static_multipart:content_length(Partial),
     ContentLengthStr = list_to_binary(integer_to_list(ContentLength)),
-    ContentTypeStr = cowboy_sendfile_multipart:content_type(Boundary),
+    ContentTypeStr = cowboy_static_multipart:content_type(Boundary),
     Headers = [
         {<<"Content-Type">>, ContentTypeStr},
         {<<"Content-Length">>, ContentLengthStr}],
@@ -399,8 +399,8 @@ esc_segment(<<>>, Acc) ->
     Acc.
 
 %% @private Convert an integer to a binary string.
--spec list_to_binary(integer()) -> binary().
-list_to_binary(Int) ->
+-spec integer_to_binary(integer()) -> binary().
+integer_to_binary(Int) ->
     list_to_binary(integer_to_list(Int)).
 
 

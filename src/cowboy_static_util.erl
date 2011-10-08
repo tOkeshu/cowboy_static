@@ -1,0 +1,1 @@
+-module(cowboy_static_util).

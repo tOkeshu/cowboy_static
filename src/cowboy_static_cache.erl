@@ -21,7 +21,7 @@
 %% are computed by background workers and pushed into the cache once they are
 %% available.
 
--module(cowboy_sendfile_cache).
+-module(cowboy_static_cache).
 
 %% include files
 -include_lib("kernel/include/file.hrl").
