@@ -398,6 +398,11 @@ esc_segment(<<C, Rest/binary>>, Acc) ->
 esc_segment(<<>>, Acc) ->
     Acc.
 
+%% @private Convert an integer to a binary string.
+-spec list_to_binary(integer()) -> binary().
+list_to_binary(Int) ->
+    list_to_binary(integer_to_list(Int)).
+
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
