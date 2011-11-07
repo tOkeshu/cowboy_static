@@ -126,7 +126,7 @@ validate_path(Req0, #conf{dir=Dir}=Conf, State) ->
     case abs_path(Dir, esc_path(Path0)) of
         invalid ->
             %% @todo Better response code?
-            {ok, Req2} = cowboy_http_reply:reply(404, [], <<>>, Req1),
+            {ok, Req2} = cowboy_http_req:reply(404, [], <<>>, Req1),
             {ok, Req2, Conf};
         Path1 ->
             validate_path_allowed(Req1, Conf, State#state{path=Path1})
