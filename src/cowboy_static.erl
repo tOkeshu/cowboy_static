@@ -99,11 +99,13 @@ rule(Opts) ->
     {Pattern, ?MODULE, Conf}.
 
 
-init({tcp, http}, Req, Conf) when is_record(Conf, conf) ->
-    {ok, Req, Conf};
-init({tcp, http}, Req, Opts) when is_list(Opts) ->
+init({Transport, http}, Req, Opts) when is_list(Opts) ->
     {_, _, Conf} = rule(Opts),
-    {ok, Req, Conf}.
+    init({Transport, http}, Req, Conf);
+    
+init({Transport, http}, Req, Conf) ->
+    Conf1 = downgrade_filemod(Transport, Conf),
+    {ok, Req, Conf1}.
 
 handle(Req, Conf) ->
     method_allowed(Req, Conf, #state{}).
@@ -358,6 +360,16 @@ send_file_contents(Req1, Conf, State, Transport, Socket, FD, ChunkSize, N) ->
             ok = Transport:send(Socket, Data),
             send_file_contents(Req1, Conf, State, Transport, Socket, FD, ChunkSize, N-NBytes)
     end.
+
+
+%% @private Handle sendfile option in conjuntion with ssl sockets.
+-spec downgrade_filemod(tcp | ssl, #conf{}) -> #conf{}.
+downgrade_filemod(tcp, Conf) ->
+    Conf;
+downgrade_filemod(ssl, Conf) when not Conf#conf.usesfile ->
+    Conf;
+downgrade_filemod(ssl, Conf) ->
+    Conf#conf{usesfile=false}.
 
 
 %% @private Return an absolute file path based on the static file root.
