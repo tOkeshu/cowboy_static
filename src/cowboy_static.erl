@@ -61,6 +61,8 @@
 %% @end
 -spec rule([option()]) -> term().
 rule(Opts) ->
+    is_list(Opts) orelse erlang:error({badarg, option_list_required}),
+
     {_, Dir} = lists:keyfind(dir, 1, Opts),
     Size = case lists:keyfind(chunk_size, 1, Opts) of
         {_, ISize} -> ISize;
