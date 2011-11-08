@@ -337,6 +337,18 @@ choose_filemod(ssl, false) -> cowboy_static_file;
 choose_filemod(tcp, false) -> cowboy_static_file;
 choose_filemod(tcp, true)  -> cowboy_static_sfile.
 
+
+%% @private Ensure that a path is a list of binary segments.
+%% This ensures that any path that filename:split/2 accepts can be used.
+-spec path_to_segments([binary()] | string() | binary()) -> [binary()].
+path_to_segments([H|_]=Path) when is_binary(H) ->
+    Path;
+path_to_segments([H|_]=Path) when is_integer(H) ->
+    [list_to_binary(E) || E <- filename:split(Path)];
+path_to_segments(<<Path/binary>>) ->
+    filename:split(Path).
+
+
 %% @private Return an absolute file path based on the static file root.
 -spec abs_path(Dir::[binary()], Path::[binary()]) -> [binary()].
 abs_path(Dir, Path) ->
@@ -393,5 +405,14 @@ abs_path_test_() ->
         {[<<"tmp">>, <<"static">>, <<"foo.css">>], [<<".">>, <<"foo.css">>]}
     ],
     [?_assertEqual(Exp, abs_path(TestDir, Path)) || {Exp, Path} <- Tests].
+
+split_path_test_() ->
+    [?_assertEqual([<<"/">>], path_to_segments("/")),
+     ?_assertEqual([<<"/">>], path_to_segments(<<"/">>)),
+     ?_assertEqual([<<"/">>], path_to_segments([<<"/">>])),
+     ?_assertEqual([<<"b">>], path_to_segments("b/")),
+     ?_assertEqual([<<"b">>], path_to_segments(<<"b/">>)),
+     ?_assertEqual([<<"b">>], path_to_segments([<<"b">>]))
+    ].
 
 -endif.
