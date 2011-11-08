@@ -42,13 +42,14 @@
 
 %% handler state
 -record(state, {
-    method :: 'GET' | 'HEAD',
-    path   :: [binary()],
-    finfo  :: #file_info{},
-    fname  :: binary(),
-    ctype  :: binary(),
-    ranges :: [{uint(), uint(), uint()}],
-    fd     :: term()}).
+    method  :: 'GET' | 'HEAD',
+    path    :: [binary()],
+    finfo   :: #file_info{},
+    fname   :: binary(),
+    ctype   :: binary(),
+    ranges  :: [{uint(), uint(), uint()}],
+    filemod :: atom(),
+    filearg :: term()}).
 
 -type option()
    :: {prefix, [binary()]}
@@ -104,11 +105,12 @@ init({Transport, http}, Req, Opts) when is_list(Opts) ->
     init({Transport, http}, Req, Conf);
     
 init({Transport, http}, Req, Conf) ->
-    Conf1 = downgrade_filemod(Transport, Conf),
-    {ok, Req, Conf1}.
+    Filemod = choose_filemod(Transport, Conf#conf.usesfile),
+    State = #state{filemod=Filemod},
+    {ok, Req, {Conf, State}}.
 
-handle(Req, Conf) ->
-    method_allowed(Req, Conf, #state{}).
+handle(Req, {Conf, State}) ->
+    method_allowed(Req, Conf, State).
 
 terminate(_Req, _Conf) ->
     ok.
@@ -218,16 +220,10 @@ range_header_exists(Req, Conf, State) ->
     open_file_handle(Req, Conf, State#state{ranges=none}).
 
 
-
-%% The sendfile module expects to be sent a filename and handles opening the
-%% file itself. When using the regular file module we really want to aquire
-%% the file handle as soon as possible in order to bail out early.
-open_file_handle(Req, Conf, State) when Conf#conf.usesfile ->
-    init_send_reply(Req, Conf, State);
-open_file_handle(Req0, Conf, #state{path=Path}=State) ->
-    case file:open(Path, [read,binary,raw]) of
-        {ok, FD} ->
-            init_send_reply(Req0, Conf, State#state{fd=FD});
+open_file_handle(Req0, Conf, #state{path=Path, filemod=Filemod}=State) ->
+    case Filemod:open(Path, []) of
+        {ok, File} ->
+            init_send_reply(Req0, Conf, State#state{filearg=File});
         {error, eacces} ->
             {ok, Req1} = cowboy_http_req:reply(403, [], <<>>, Req0),
             {ok, Req1, Conf};
@@ -238,6 +234,7 @@ open_file_handle(Req0, Conf, #state{path=Path}=State) ->
             {ok, Req1} = cowboy_http_req:reply(404, [], <<>>, Req0),
             {ok, Req1, Conf};
         {error, Reason} ->
+            %% @todo Log error reason using logging function.
             Error = io_lib:format("Error opening file: ~p~n", [Reason]),
             {ok, Req1} = cowboy_http_req:reply(500, [], Error, Req0),
             {ok, Req1, Conf}
@@ -269,29 +266,17 @@ init_send_complete_response(Req0, Conf, State) ->
     %% the response body and use the same code for everything else.
     case State#state.method of
         'HEAD' ->
-            {ok, Req1, Conf};
+            {ok, Req1, {Conf, State}};
         'GET' ->
             Filesize = FInfo#file_info.size,
-            init_send_file_contents(Req1, Conf, State, 0, Filesize)
+            Filemod = State#state.filemod,
+            Filearg = State#state.filearg,
+            Socket = Req1#http_req.socket,
+            Transport = Req1#http_req.transport,
+            ok = Filemod:stream(0, Filesize, Filearg, Transport, Socket),
+            {ok, Req1, {Conf, State}}
     end.
 
-
-send_chunked_response_body(Req, Conf, State) ->
-    #conf{csize=ChSize} = Conf,
-    #state{finfo=FInfo, fd=FD} = State,
-    #file_info{size=CoLength} = FInfo,
-    send_chunked_response_body(Req, Conf, State, FD, ChSize, CoLength).
-
-send_chunked_response_body(Req, Conf, _State, FD, _ChSize, 0) ->
-    file:close(FD),
-    {ok, Req, Conf};
-send_chunked_response_body(Req, Conf, State, FD, ChSize, N) ->
-    NBytes = if N < ChSize -> N; true -> ChSize end,
-    case file:read(FD, NBytes) of
-        {ok, Data} when byte_size(Data) =:= NBytes ->
-            ok = cowboy_http_req:chunk(Data, Req),
-            send_chunked_response_body(Req, Conf, State, FD, ChSize, N-NBytes)
-    end.
 
 %% If a byte-range request only contains one byte range, the contents of
 %% that range can be sent to the client using a normal response body.
@@ -302,7 +287,12 @@ init_send_partial_response(Req0, Conf, State) ->
         {<<"Content-Length">>, list_to_binary(integer_to_list(Length))},
         cowboy_static_hdrs:make_range(Start, End, ContentLength)],
     {ok, Req1} = cowboy_http_req:reply(206, Headers, <<>>, Req0),
-    init_send_file_contents(Req1, Conf, State, Start, Length).
+    Filemod = State#state.filemod,
+    Filearg = State#state.filearg,
+    Socket = Req1#http_req.socket,
+    Transport = Req1#http_req.transport,
+    ok = Filemod:stream(Start, Length, Filearg, Transport, Socket),
+    {ok, Req1, {Conf, State}}.
 
 %% If a byte-range request contains multiple ranges. The contents of
 %% the ranges must be sent as parts of a multipart response.
@@ -318,59 +308,34 @@ init_send_multipart_response(Req0, Conf, State) ->
         {<<"Content-Type">>, ContentTypeStr},
         {<<"Content-Length">>, ContentLengthStr}],
     {ok, Req1} = cowboy_http_req:reply(206, Headers, <<>>, Req0),
-    #http_req{socket=Socket, transport=Transport} = Req1,
-    send_multipart_response(Req1, Conf, State, Partial, Transport, Socket).
+    send_multipart_response(Req1, Conf, State, Partial).
 
 
-send_multipart_response(Req, Conf, _State, [], _Transport, _Socket) ->
-    {ok, Req, Conf};
+send_multipart_response(Req, Conf, State, []) ->
+    {ok, Req, {Conf, State}};
 
-send_multipart_response(Req0, Conf, State, [{_,_,_}=H|T], Transport, Socket) ->
+send_multipart_response(Req, Conf, State, [{_,_,_}=H|T]) ->
     {Start, _, Length} = H,
-    {ok, Req1, _} = init_send_file_contents(Req0, Conf, State, Start, Length),
-    send_multipart_response(Req1, Conf, State, T, Transport, Socket);
+    Filemod = State#state.filemod,
+    Filearg = State#state.filearg,
+    Socket = Req#http_req.socket,
+    Transport = Req#http_req.transport,
+    ok = Filemod:stream(Start, Length, Filearg, Transport, Socket),
+    send_multipart_response(Req, Conf, State, T);
 
-send_multipart_response(Req, Conf, State, [IOList|T], Transport, Socket) ->
+send_multipart_response(Req, Conf, State, [IOList|T]) ->
+    Socket = Req#http_req.socket,
+    Transport = Req#http_req.transport,
     ok = Transport:send(Socket, IOList),
-    send_multipart_response(Req, Conf, State, T, Transport, Socket).
+    send_multipart_response(Req, Conf, State, T).
 
 
-%% Stream the contents of a file to a socket. This assumes that the response
-%% headers has been sent and the Content-Length header was set to 'Length'.
-init_send_file_contents(Req, Conf, State, Start, Length) when Conf#conf.usesfile ->
-    #http_req{socket=Socket} = Req,
-    #state{path=Path} = State,
-    {ok, Length} = sendfile:send(Socket, Path, Start, Length),
-    {ok, Req, Conf};
-init_send_file_contents(Req, Conf, State, Start, Length) ->
-    #http_req{socket=Socket, transport=Transport} = Req,
-    #state{fd=FD} = State,
-    #conf{csize=ChunkSize} = Conf,
-    {ok, Start} = file:position(FD, {bof, Start}),
-    send_file_contents(Req, Conf, State, Transport, Socket, FD, ChunkSize, Length).
-
-
-send_file_contents(Req, Conf, _State, _Transport, _Socket, _FD, _ChunkSize, 0) ->
-    %% file:close(FD),
-    {ok, Req, Conf};
-send_file_contents(Req1, Conf, State, Transport, Socket, FD, ChunkSize, N) ->
-    NBytes = if N < ChunkSize -> N; true -> ChunkSize end,
-    case file:read(FD, NBytes) of
-        {ok, Data} when byte_size(Data) =:= NBytes ->
-            ok = Transport:send(Socket, Data),
-            send_file_contents(Req1, Conf, State, Transport, Socket, FD, ChunkSize, N-NBytes)
-    end.
-
-
-%% @private Handle sendfile option in conjuntion with ssl sockets.
--spec downgrade_filemod(tcp | ssl, #conf{}) -> #conf{}.
-downgrade_filemod(tcp, Conf) ->
-    Conf;
-downgrade_filemod(ssl, Conf) when not Conf#conf.usesfile ->
-    Conf;
-downgrade_filemod(ssl, Conf) ->
-    Conf#conf{usesfile=false}.
-
+%% @private Return the file module to use for this request.
+-spec choose_filemod(tcp | ssl, boolean()) -> atom().
+choose_filemod(ssl, true)  -> cowboy_static_file;
+choose_filemod(ssl, false) -> cowboy_static_file;
+choose_filemod(tcp, false) -> cowboy_static_file;
+choose_filemod(tcp, true)  -> cowboy_static_sfile.
 
 %% @private Return an absolute file path based on the static file root.
 -spec abs_path(Dir::[binary()], Path::[binary()]) -> [binary()].
