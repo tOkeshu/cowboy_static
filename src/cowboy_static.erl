@@ -331,6 +331,14 @@ send_multipart_response(Req, Conf, State, [IOList|T]) ->
     send_multipart_response(Req, Conf, State, T).
 
 
+%% @private Check if sendfile is supported on this node, if used.
+-spec detect_sendfile(boolean()) -> boolean().
+detect_sendfile(false) ->
+    false;
+detect_sendfile(true) ->
+    erlang:function_exported(sendfile, send, 4).
+
+
 %% @private Return the file module to use for this request.
 -spec choose_filemod(tcp | ssl, boolean()) -> atom().
 choose_filemod(ssl, true)  -> cowboy_static_file;
