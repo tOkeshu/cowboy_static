@@ -347,7 +347,9 @@ path_to_segments([H|_]=Path) when is_binary(H) ->
 path_to_segments([H|_]=Path) when is_integer(H) ->
     [list_to_binary(E) || E <- filename:split(Path)];
 path_to_segments(<<Path/binary>>) ->
-    filename:split(Path).
+    filename:split(Path);
+path_to_segments([]) ->
+    [].
 
 
 %% @private Return an absolute file path based on the static file root.
@@ -408,7 +410,8 @@ abs_path_test_() ->
     [?_assertEqual(Exp, abs_path(TestDir, Path)) || {Exp, Path} <- Tests].
 
 split_path_test_() ->
-    [?_assertEqual([<<"/">>], path_to_segments("/")),
+    [?_assertEqual([], path_to_segments([])),
+     ?_assertEqual([<<"/">>], path_to_segments("/")),
      ?_assertEqual([<<"/">>], path_to_segments(<<"/">>)),
      ?_assertEqual([<<"/">>], path_to_segments([<<"/">>])),
      ?_assertEqual([<<"b">>], path_to_segments("b/")),
