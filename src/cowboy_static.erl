@@ -78,8 +78,8 @@ rule(Opts) ->
         {_, IRanges} -> IRanges;
         false -> true
     end,
-    Sendfile = case lists:keyfind(sendfile, 1, Opts) of
-        {_, ISendfile} -> ISendfile;
+    Sendfile1 = case lists:keyfind(sendfile, 1, Opts) of
+        {_, Sendfile} -> detect_sendfile(Sendfile);
         false -> true
     end,
     {MimeMod, MimeArg} = case lists:keyfind(mimetypes, 1, Opts) of
@@ -93,7 +93,7 @@ rule(Opts) ->
         csize=Size,
         prefix=Prefix1,
         ranges=Ranges,
-        usesfile=Sendfile,
+        usesfile=Sendfile1,
         mimemod=MimeMod,
         mimearg=MimeArg,
         chandle=CacheHandle},
