@@ -65,12 +65,13 @@ rule(Opts) ->
     is_list(Opts) orelse erlang:error({badarg, option_list_required}),
 
     {_, Dir} = lists:keyfind(dir, 1, Opts),
+    Dir1 = path_to_segments(Dir),
     Size = case lists:keyfind(chunk_size, 1, Opts) of
         {_, ISize} -> ISize;
         false -> 10240
     end,
-    Prefix = case lists:keyfind(prefix, 1, Opts) of
-        {_, IPrefix} -> IPrefix;
+    Prefix1 = case lists:keyfind(prefix, 1, Opts) of
+        {_, Prefix} -> path_to_segments(Prefix);
         false -> []
     end,
     Ranges = case lists:keyfind(ranges, 1, Opts) of
@@ -88,15 +89,15 @@ rule(Opts) ->
     %% @todo Create this elsewhere.
     {ok, CacheHandle} = cowboy_static_cache:make(),
     Conf = #conf{
-        dir=Dir,
+        dir=Dir1,
         csize=Size,
-        prefix=Prefix,
+        prefix=Prefix1,
         ranges=Ranges,
         usesfile=Sendfile,
         mimemod=MimeMod,
         mimearg=MimeArg,
         chandle=CacheHandle},
-    Pattern = Prefix ++ ['...'],
+    Pattern = Prefix1 ++ ['...'],
     {Pattern, ?MODULE, Conf}.
 
 
