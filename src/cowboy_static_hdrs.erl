@@ -37,55 +37,6 @@
 get_range(Req) ->
     cowboy_http_req:header(<<"Range">>, Req).
 
-%% @doc Return a usable form of a Range header value.
-%% The range returned by this function is inclusive.
-%% @end
--spec parse_range(BinRange::binary(), ContentLength::pos_integer()) ->
-          {Start::pos_integer(), End::pos_integer()}.
-parse_range(<<"bytes=", RangeSetBin/binary>>, ContentLength) ->
-    RangeSetBins = binary:split(RangeSetBin, [<<",">>]),
-    RangeSet = [parse_range_spec(E, ContentLength) || E <- RangeSetBins],
-    %% @todo If an invalid range occurs in the Range header all ranges
-    %% that are valid should be included in the response instead. Ensure
-    %% that this is handled elsewhere and return the RangeSet as is.
-    case lists:member(error, RangeSet) of
-        true  -> error;
-        false -> RangeSet
-    end;
-parse_range(_Other, _ContentLength) ->
-    error.
-
-%% @private Expect and parse a byte-range-spec.
--spec parse_range_spec(binary(), uint()) -> {Start::uint(), End::uint()}.
-parse_range_spec(ElemBin, ContentLength) ->
-    Range = case binary:split(ElemBin, [<<"-">>]) of
-        [IStart, IEnd] -> {binary_to_integer(IStart), binary_to_integer(IEnd)};
-        _ -> error
-    end,
-    case Range of
-        %% "-N" (Last N bytes of content)
-        {none, Length} when is_integer(Length) ->
-            Start = ContentLength - Length,
-            End = ContentLength - 1,
-            valid_range_spec(Start, End, ContentLength);
-        %% "N-" (From byte N to end of content)
-        {Start, none} when is_integer(Start) ->
-            End = ContentLength - 1,
-            valid_range_spec(Start, End, ContentLength);
-        %% "N-M" (From byte N to byte M)
-        {Start, End} when is_integer(Start), is_integer(End) ->
-            valid_range_spec(Start, End, ContentLength);
-        _Other ->
-            error
-    end.
-
-%% @private Contstuct a valid byte-range. Return error on invalid input.
--spec valid_range_spec(uint(), uint(), uint()) -> {uint(), uint()}.
-valid_range_spec(Start, End, ContentLength)
-when 0 =< Start, Start =< End, End < ContentLength ->
-    {Start, End, (End-Start)+1};
-valid_range_spec(_Start, _End, _ContentLength) ->
-    error.
 
 %% @doc Make a Content-Range header with a known Content-Length.
 %% The content range header is included in 206 (Partial Content) responses

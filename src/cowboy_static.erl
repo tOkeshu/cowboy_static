@@ -11,340 +11,171 @@
 %% WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 %% ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 %% OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+-module(cowboy_http_static).
+%% @doc Static resource handler.
+%%
+%% This built in HTTP handler provides a simple file serving capability for
+%% cowboy applications. It is only recommended to be used during development
+%% and for small deployments. It has limited support for mimetype detection
+%% based on the extension part of the file name served.
+%%
+%% The available options are:
+%% <dl>                                                                         
+%%  <dt>directory</dt><dd>The directory to search for files under.</dd>
+%%  <dt>mimetypes</dt><dd>The function mapping file names to mime types.
+%%   Defaults to `{fun cowboy_http_static:path_to_mimes/2, default}'</dd>              
+%% </dl>
+%%
+%% === Mimetype configuration ===
+%%
+%% === Directory configuration ===
 
--module(cowboy_static).
--behaviour(cowboy_http_handler).
 
 %% include files
 -include_lib("kernel/include/file.hrl").
--include_lib("cowboy/include/http.hrl").
 
-%% exported functions
--export([rule/1]).
+%% cowboy_http_protocol callbacks
+-export([init/3]).
 
-%% cowboy callbacks
--export([init/3, handle/2, terminate/2]).
+%% cowboy_http_rest callbacks
+-compile(export_all).
 
 %% type aliases
--type uint() :: non_neg_integer().
--type cache_handle() :: cowboy_static_cache:handle().
-
-%% handler config
--record(conf, {
-    dir      :: [binary()],
-    prefix   :: [binary()],
-    csize    :: pos_integer(),
-    ranges   :: boolean(),
-    usesfile :: boolean(),
-    mimemod  :: atom(),
-    mimearg  :: term(),
-    chandle  :: cache_handle()}).
+-type req() :: #http_req{}.
 
 %% handler state
 -record(state, {
-    method  :: 'GET' | 'HEAD',
-    path    :: [binary()],
-    finfo   :: #file_info{},
-    fname   :: binary(),
-    ctype   :: binary(),
-    ranges  :: [{uint(), uint(), uint()}],
-    filemod :: atom(),
-    filearg :: term()}).
-
--type option()
-   :: {prefix, [binary()]}
-    | {chunk_size, pos_integer()}
-    | {ranges, boolean()}
-    | {sendfile, boolean()}
-    | {mimetypes, atom(), term()}.
-
-%% @doc Return a cowboy dispatch rule.
-%% @end
--spec rule([option()]) -> term().
-rule(Opts) ->
-    is_list(Opts) orelse erlang:error({badarg, option_list_required}),
-
-    {_, Dir} = lists:keyfind(dir, 1, Opts),
-    Dir1 = path_to_segments(Dir),
-    Size = case lists:keyfind(chunk_size, 1, Opts) of
-        {_, ISize} -> ISize;
-        false -> 10240
-    end,
-    Prefix1 = case lists:keyfind(prefix, 1, Opts) of
-        {_, Prefix} -> path_to_segments(Prefix);
-        false -> []
-    end,
-    Ranges = case lists:keyfind(ranges, 1, Opts) of
-        {_, IRanges} -> IRanges;
-        false -> true
-    end,
-    Sendfile1 = case lists:keyfind(sendfile, 1, Opts) of
-        {_, Sendfile} -> detect_sendfile(Sendfile);
-        false -> true
-    end,
-    {MimeMod, MimeArg} = case lists:keyfind(mimetypes, 1, Opts) of
-        {_, IMimeMod, IMimeArg} -> {IMimeMod, IMimeArg};
-        false -> {mimetypes, default}
-    end,
-    %% @todo Create this elsewhere.
-    {ok, CacheHandle} = cowboy_static_cache:make(),
-    Conf = #conf{
-        dir=Dir1,
-        csize=Size,
-        prefix=Prefix1,
-        ranges=Ranges,
-        usesfile=Sendfile1,
-        mimemod=MimeMod,
-        mimearg=MimeArg,
-        chandle=CacheHandle},
-    Pattern = Prefix1 ++ ['...'],
-    {Pattern, ?MODULE, Conf}.
+	filepath  :: binary(),
+	fileinfo  :: #file_info{},
+	mimetypes :: {fun((binary(), T) -> [{binary(), binary(), _}]), T}}).
 
 
-init({Transport, http}, Req, Opts) when is_list(Opts) ->
-    {_, _, Conf} = rule(Opts),
-    init({Transport, http}, Req, Conf);
-    
-init({Transport, http}, Req, Conf) ->
-    Filemod = choose_filemod(Transport, Conf#conf.usesfile),
-    State = #state{filemod=Filemod},
-    {ok, Req, {Conf, State}}.
+%% @private Upgrade from HTTP handler to REST handler.
+init({_Transport, http}, _Req, _Opts) ->
+    {upgrade, protocol, cowboy_http_rest}.
 
-handle(Req, {Conf, State}) ->
-    method_allowed(Req, Conf, State).
+%% @private unused callback for cowboy_http_protocol behaviour.
+handle(_Req, _State) ->
+    ignore.
 
-terminate(_Req, _Conf) ->
+%% @private unused callback for cowboy_http_protocol behaviour.
+terminate(_Req, _State) ->
     ok.
 
-method_allowed(Req0, Conf, State) ->
-    case cowboy_http_req:method(Req0) of
-        {'GET', Req1} ->
-            validate_path(Req1, Conf, State#state{method='GET'});
-        {'HEAD', Req1} ->
-            validate_path(Req1, Conf, State#state{method='HEAD'});
-        {_, Req1} ->
-            {ok, Req2} = cowboy_http_req:reply(405, [], <<>>, Req1),
-            {ok, Req2, Conf}
-    end.
+
+%% @private Set up initial state of REST handler.
+-spec rest_init(req(), list()) -> {ok, req(), #state{}}.
+rest_init(Req, Opts) ->
+	Directory = proplists:get_value(directory, Opts),
+	DefaultMimetypes = {fun path_to_mimetypes/2, default},
+	Mimetypes = proplists:get_value(mimetypes, Opts, DefaultMimetypes),
+    {Filepath, Req1} = cowboy_http_req:path_info(Req),
+    Filepath1 = esc_path(Filepath),
+	Filepath2 = abs_path(Directory, Filepath1),
+	Filepath3 = join_path(Filepath2),
+    Fileinfo = case Filepath of
+        invalid -> {error, badpath};
+        _Valid -> file:read_file_info(Filepath)
+    end,
+    State = #state{filepath=Filepath, fileinfo=Fileinfo, mimetypes=Mimetypes},
+    {ok, Req1, State}.
 
 
-validate_path(Req0, #conf{dir=Dir}=Conf, State) ->
-    {Path0, Req1} = cowboy_http_req:path_info(Req0),
-    case abs_path(Dir, esc_path(Path0)) of
-        invalid ->
-            %% @todo Better response code?
-            {ok, Req2} = cowboy_http_req:reply(404, [], <<>>, Req1),
-            {ok, Req2, Conf};
-        Path1 ->
-            validate_path_allowed(Req1, Conf, State#state{path=Path1})
-    end.
+%% @private Only allow GET and HEAD requests on static resources.
+-spec allowed_methods(req(), #state{}) -> {[atom()], req(), #state{}}.
+allowed_methods(Req, State) ->
+    {['GET', 'HEAD'], Req, State}.
 
 
-validate_path_allowed(Req0, #conf{dir=Dir}=Conf, #state{path=Path}=State0) ->
-    case lists:prefix(Dir, Path) of
+%% @private Check if the resource exists under the document root.
+-spec resource_exists(req(), #state{}) -> {boolean(), req(), #state{}}.
+resource_exists(Req, #state{fileinfo={Status, Fileinfo}}=State) ->
+    Exists = Status =:= ok andalso Fileinfo#file_info.type =:= regular,
+    {Exists, Req, State}.
+
+
+%% @private Check if the requested resource can be accessed.
+-spec forbidden(req(), #state{}) -> {boolean(), req(), #state{}}.
+forbidden(Req, #state{fileinfo={Status, Fileinfo}}=State) ->
+    Readable = case Status =:= ok andalso Fileinfo#file_info.access of
+        read -> true; read_write -> true; false -> true; _ -> false end,
+    {not Readable, Req, State}.
+
+
+%% @private Read the time a file system system object was last modified.
+-spec last_modified(req(), #state{}) -> {cowboy_clock:datetime(), req(), #state{}}.
+last_modified(Req, #state{fileinfo={ok, Fileinfo}}=State) ->
+    Modified = Fileinfo#file_info.mtime,
+    {Modified, Req, State}.
+
+
+%% @private Return the content type of a file.
+-spec content_types_provided(req(), #state{}) -> tuple().
+content_types_provided(Req, #state{filepath=Filepath,
+		mimetypes={MimetypesFun, MimetypesData}}=State) ->
+	Mimetypes = [begin {I, J, K} = Type, {{I, J, K}, file_contents} end
+		|| Type <- MimetypesFun(Filepath, MimetypesData)],
+    {Mimetypes, Req, State}.
+
+
+%% @private Read and return the contents of a file.
+-spec file_contents(req(), #state{}) -> tuple().
+file_contents(Req, #state{filepath=Filepath, fileinfo=Fileinfo}=State) ->
+	{ok, Transport, Socket} = cowboy_http_req:transport(Req),
+	StreamFun = content_function(Transport, Socket, Filepath),
+	StreamLen = Fileinfo#file_info.size,
+    {{stream, StreamLen, StreamFun}, Req, State}.
+
+
+%% @private Return a function writing the contents of a file to a socket.
+%% The function returns the number of bytes written to the socket to enable
+%% the calling function to determine if the expected number of bytes were
+%% written to the socket.
+-spec content_function(module(), inet:socket(), binary()) ->
+	fun(() -> {sent, non_neg_integer()}).
+content_function(Transport, Socket, Filepath) ->
+    case erlang:function_exported(file, sendfile, 4) of
+        %% `file:sendfile/4' will only work with the `cowboy_tcp_transport'
+        %% transport module. SSL or future SPDY transports that require the
+        %% content to be encryptet or framed as the content is sent.
         false ->
-            {ok, Req1} = cowboy_http_req:reply(404, [], <<>>, Req0),
-            {ok, Req1, Conf};
+			fun() -> sfallback(Transport, Socket, Filepath) end;
+		_ when Transport =/= cowboy_tcp_transport ->
+			fun() -> sfallback(Transport, Socket, Filepath) end;
         true ->
-            State1 = State0#state{fname=lists:last(Path), path=filename:join(Path)},
-            resource_exists(Req0, Conf, State1)
-    end.
-
-resource_exists(Req0, #conf{chandle=Cache}=Conf, #state{path=Path}=State) ->
-    case cowboy_static_cache:read_info(Path, Cache) of
-        {ok, #file_info{}=FInfo} ->
-            validate_resource_type(Req0, Conf, State#state{finfo=FInfo});
-        {error, enoent} ->
-            {ok, Req1} = cowboy_http_req:reply(404, [], <<>>, Req0),
-            {ok, Req1, Conf}
-    end.
-
-validate_resource_type(Req0, Conf, #state{finfo=FInfo}=State) ->
-    {RawPath, Req1} = cowboy_http_req:raw_path(Req0),
-    LastChar = binary:last(RawPath),
-    case FInfo of
-        #file_info{type=regular} ->
-            validate_resource_access(Req1, Conf, State);
-        #file_info{type=directory} when LastChar =:= $/ ->
-            {ok, Req2} = cowboy_http_req:reply(404, [], <<>>, Req1),
-            {ok, Req2, Conf};
-        #file_info{type=directory} when LastChar =/= $/ ->
-            {RedirectURL, Req2} = cowboy_static_hdrs:make_location(Req1),
-            Headers = [{<<"Location">>, RedirectURL}],
-            {ok, Req3} = cowboy_http_req:reply(301, Headers, <<>>, Req2),
-            {ok, Req3, Conf};
-        _Other ->
-            {ok, Req2} = cowboy_http_req:reply(404, [], <<>>, Req1),
-            {ok, Req2, Conf}
-    end.
-
-validate_resource_access(Req0, Conf, #state{finfo=FInfo}=State) ->
-    case FInfo of
-        #file_info{access=read} ->
-            detect_content_type(Req0, Conf, State);
-        #file_info{access=read_write} ->
-            detect_content_type(Req0, Conf, State);
-        _Other ->
-            {ok, Req1} = cowboy_http_req:reply(403, [], <<>>, Req0),
-            {ok, Req1, Conf}
-    end.
-
-detect_content_type(Req, Conf, #state{fname=Filename}=State) ->
-    #conf{mimemod=MimeMod, mimearg=MimeArg} = Conf,
-    Default = <<"application/octet-stream">>,
-    case filename:extension(Filename) of
-        <<>> ->
-            range_header_exists(Req, Conf, State#state{ctype=Default});
-        <<$.,Ext/binary>> ->
-            case MimeMod:ext_to_mimes(Ext, MimeArg) of
-                [] ->
-                    range_header_exists(Req, Conf, State#state{ctype=Default});
-                [H|_] ->
-                    range_header_exists(Req, Conf, State#state{ctype=H});
-                Other ->
-                    exit({detect_content, Other})
-            end;
-        Other ->
-            exit({detect_content, Other})
-    end.
-
-range_header_exists(Req0, Conf, #state{finfo=FInfo}=State) when Conf#conf.ranges ->
-    #file_info{size=ContentLength} = FInfo,
-    case cowboy_http_req:header('Range', Req0) of
-        {undefined, Req1} ->
-            open_file_handle(Req1, Conf, State#state{ranges=none});
-        {RangesBin, Req1} ->
-            Ranges = cowboy_static_hdrs:parse_range(RangesBin, ContentLength),
-            open_file_handle(Req1, Conf, State#state{ranges=Ranges})
-    end;
-range_header_exists(Req, Conf, State) ->
-    open_file_handle(Req, Conf, State#state{ranges=none}).
-
-
-open_file_handle(Req0, Conf, #state{path=Path, filemod=Filemod}=State) ->
-    case Filemod:open(Path, []) of
-        {ok, File} ->
-            init_send_reply(Req0, Conf, State#state{filearg=File});
-        {error, eacces} ->
-            {ok, Req1} = cowboy_http_req:reply(403, [], <<>>, Req0),
-            {ok, Req1, Conf};
-        {error, eisdir} ->
-            {ok, Req1} = cowboy_http_req:reply(403, [], <<>>, Req0),
-            {ok, Req1, Conf};
-        {error, enoent} ->
-            {ok, Req1} = cowboy_http_req:reply(404, [], <<>>, Req0),
-            {ok, Req1, Conf};
-        {error, Reason} ->
-            %% @todo Log error reason using logging function.
-            Error = io_lib:format("Error opening file: ~p~n", [Reason]),
-            {ok, Req1} = cowboy_http_req:reply(500, [], Error, Req0),
-            {ok, Req1, Conf}
+			fun() -> sendfile(Socket, Filepath) end
     end.
 
 
-init_send_reply(Req, Conf, #state{ranges=[_]}=State) ->
-    init_send_partial_response(Req, Conf, State);
-init_send_reply(Req, Conf, #state{ranges=[_|_]}=State) ->
-    init_send_multipart_response(Req, Conf, State);
-init_send_reply(Req, Conf, #state{ranges=error}=State) ->
-    init_send_complete_response(Req, Conf, State);
-init_send_reply(Req, Conf, State) ->
-    init_send_complete_response(Req, Conf, State).
+%% @private Sendfile fallback function.
+%% For older Erlang releases. Fall back to using the file:read/2 and
+%% Transport:send/2 functions to send the file contents to the client.
+%% Transports other than `cowboy_tcp_transport' also require using this
+%% functions because they may rely on the transport module encrypting or
+%% framing the response body.
+-spec sfallback(module(), inet:socket(), binary()) -> {sent, non_neg_integer()}.
+sfallback(Transport, Socket, Filepath) ->
+	{ok, File} = file:open(Path, [read,binary,raw]),
+	sfallback_(Transport, Socket, File, 0).
 
+-spec sfallback(module(), inet:socket(), binary(), non_neg_integer()) ->
+		{sent, non_neg_integer()}.
+sfallback_(Transport, Socket, File, Sent) ->
+	case file:read(File, 1024), 
+		eof ->
+			file:close(File);
+			{sent, Sent};
+		{ok, Bin} ->
+			ok = Transport:write(Socket, Bin),
+			sfallback(Transport, Socket, File, Sent + byte_size(Bin))
+	end.
 
-init_send_complete_response(Req0, Conf, State) ->
-    #state{finfo=FInfo, ctype=CType} = State,
-    CacheEntry = cowboy_static_cache:read_entry(FInfo, Conf#conf.chandle),
-    LastModified = cowboy_static_cache:last_modified(CacheEntry),
-    ContentLength = cowboy_static_cache:content_length(CacheEntry),
-    Headers = [
-        {<<"Content-Length">>, ContentLength},
-        {<<"Content-Type">>, CType},
-        {<<"Last-Modified">>, LastModified}],
-    {ok, Req1} = cowboy_http_req:reply(200, Headers, <<>>, Req0),
-    %% The response to a HEAD Request is expected to be the same as a GET
-    %% except for the lack of a Response body. Stop right before sending
-    %% the response body and use the same code for everything else.
-    case State#state.method of
-        'HEAD' ->
-            {ok, Req1, {Conf, State}};
-        'GET' ->
-            Filesize = FInfo#file_info.size,
-            Filemod = State#state.filemod,
-            Filearg = State#state.filearg,
-            Socket = Req1#http_req.socket,
-            Transport = Req1#http_req.transport,
-            ok = Filemod:stream(0, Filesize, Filearg, Transport, Socket),
-            {ok, Req1, {Conf, State}}
-    end.
+%% @private Wrapper for sendfile function.
+-spec sendfile(inet:socket(), binary()) -> {sent, non_neg_integer()}.
+sendfile(Socket, Filepath) ->
+	{ok, Sent} = file:sendfile(Filepath, Socket), %% @todo
+	{sent, Sent}.
 
-
-%% If a byte-range request only contains one byte range, the contents of
-%% that range can be sent to the client using a normal response body.
-init_send_partial_response(Req0, Conf, State) ->
-    #state{ranges=[{Start, End, Length}], finfo=FInfo} = State,
-    #file_info{size=ContentLength} = FInfo,
-    Headers = [
-        {<<"Content-Length">>, list_to_binary(integer_to_list(Length))},
-        cowboy_static_hdrs:make_range(Start, End, ContentLength)],
-    {ok, Req1} = cowboy_http_req:reply(206, Headers, <<>>, Req0),
-    Filemod = State#state.filemod,
-    Filearg = State#state.filearg,
-    Socket = Req1#http_req.socket,
-    Transport = Req1#http_req.transport,
-    ok = Filemod:stream(Start, Length, Filearg, Transport, Socket),
-    {ok, Req1, {Conf, State}}.
-
-%% If a byte-range request contains multiple ranges. The contents of
-%% the ranges must be sent as parts of a multipart response.
-init_send_multipart_response(Req0, Conf, State) ->
-    #state{ranges=Ranges, finfo=FInfo} = State,
-    #file_info{size=FileSize} = FInfo,
-    Boundary = cowboy_static_multipart:make_boundary(),
-    Partial = cowboy_static_multipart:partial(Ranges, Boundary, FileSize),
-    ContentLength = cowboy_static_multipart:content_length(Partial),
-    ContentLengthStr = list_to_binary(integer_to_list(ContentLength)),
-    ContentTypeStr = cowboy_static_multipart:content_type(Boundary),
-    Headers = [
-        {<<"Content-Type">>, ContentTypeStr},
-        {<<"Content-Length">>, ContentLengthStr}],
-    {ok, Req1} = cowboy_http_req:reply(206, Headers, <<>>, Req0),
-    send_multipart_response(Req1, Conf, State, Partial).
-
-
-send_multipart_response(Req, Conf, State, []) ->
-    {ok, Req, {Conf, State}};
-
-send_multipart_response(Req, Conf, State, [{_,_,_}=H|T]) ->
-    {Start, _, Length} = H,
-    Filemod = State#state.filemod,
-    Filearg = State#state.filearg,
-    Socket = Req#http_req.socket,
-    Transport = Req#http_req.transport,
-    ok = Filemod:stream(Start, Length, Filearg, Transport, Socket),
-    send_multipart_response(Req, Conf, State, T);
-
-send_multipart_response(Req, Conf, State, [IOList|T]) ->
-    Socket = Req#http_req.socket,
-    Transport = Req#http_req.transport,
-    ok = Transport:send(Socket, IOList),
-    send_multipart_response(Req, Conf, State, T).
-
-
-%% @private Check if sendfile is supported on this node, if used.
--spec detect_sendfile(boolean()) -> boolean().
-detect_sendfile(false) ->
-    false;
-detect_sendfile(true) ->
-    erlang:function_exported(sendfile, send, 4).
-
-
-%% @private Return the file module to use for this request.
--spec choose_filemod(tcp | ssl, boolean()) -> atom().
-choose_filemod(ssl, true)  -> cowboy_static_file;
-choose_filemod(ssl, false) -> cowboy_static_file;
-choose_filemod(tcp, false) -> cowboy_static_file;
-choose_filemod(tcp, true)  -> cowboy_static_sfile.
 
 
 %% @private Ensure that a path is a list of binary segments.
@@ -399,6 +230,16 @@ esc_segment(<<C, Rest/binary>>, Acc) ->
     esc_segment(Rest, <<Acc/binary, C>>);
 esc_segment(<<>>, Acc) ->
     Acc.
+
+
+%% @private Module local alias for filename:join
+-spec join_path([binary()]) -> binary().
+join_path(Path) ->
+    filename:join(Path).
+
+%% @private Use application/octet-stream as the default mimetype.
+path_to_mimetypes(Path, default) ->
+	[{<<"application">>, <<"octet-stream">>, []}].
 
 
 -ifdef(TEST).

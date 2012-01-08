@@ -14,15 +14,15 @@ main(Args) ->
     ok = application:start(sendfile),
     ok = noise("Starting application: cowboy~n", []),
     ok = application:start(cowboy),
+    ok = noise("Starting application: sasl~n", []),
+    ok = application:start(sasl),
     Opts = get_opts(Args),
     #opts{port=Port, dir=Dir} = Opts,
     ok = noise("Using current working directory ~s~n", [filename:join(Dir)]),
     ok = noise("Using port ~.10B~n", [Port]),
-    StaticMatch = [<<"hi">>, '_'],
-    StaticPrefix = [<<"hi">>],
     Dispatch = [
         %% {Host, list({Path, Handler, Opts})}
-        {'_', [cowboy_sendfile:rule([
+        {'_', [cowboy_static:rule([
             {dir, Dir},
             {prefix, [<<"hi">>]}
         ])]}],
@@ -31,6 +31,7 @@ main(Args) ->
         cowboy_http_protocol, [{dispatch, Dispatch}]),
     ok = noise("Server running at http://localhost:~.10B/~n", [Port]),
     MRef = erlang:monitor(process, Pid),
+    redbug:start(120*1000, 10*1000, {cowboy_static, '_', [return]}),
     receive {'DOWN', MRef, process, _, _} -> ok end.
 
 

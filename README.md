@@ -1,3 +1,9 @@
+# Status
+
+This library has been superceded by the built in file handler in the cowboy
+web server, see [cowboy_http_static](https://github.com/extend/cowboy/blob/master/src/cowboy_http_static.erl).
+
+
 ## Usage
 
 `cowboy_static:rule/1` should be used to build dispatch rules using this
